@@ -8,7 +8,7 @@ static A: System = System;
 use crossterm::{InputEvent, KeyEvent, TerminalCursor, Color, AsyncReader};
 use lazy_static::lazy_static;
 use crossterm::style;
-use rand::Rng;
+use rand::{Rng, prelude::ThreadRng};
 use winconsole::console::{self};
 use std::io::{self, Write};
 
@@ -19,9 +19,11 @@ lazy_static!{
 }
 
 const PLAYABLE_SIZE_MAX: u16 = 40;
-const GAME_VERSION: &str = "1.1";
+const GAME_VERSION: &str = "1.3";
 static mut GAME_PAUSED: bool = false;
 static mut SPEED_MULT: u64 = SPEED_MULT_ORIGINAL;
+static mut BAR_COLOR: crossterm::Color = crossterm::Color::DarkGreen;
+
 const SPEED_MULT_ORIGINAL: u64 = 6;
 
 
@@ -45,13 +47,17 @@ fn next_key() -> Option<InputEvent> {
 }
 
 fn game_loop(){
-    let mut apple_pos: Point = reset_apple();
+    let apples_pos: &mut [Point] = &mut [reset_apple(), reset_apple(), reset_apple(), reset_apple()];
     let mut points: i32 = 0;
+    let mut last_chance: bool = true;
     let mut snake = &mut Snake { 
         direction: Direction::Right, 
         head_pos: Point { x: 2, y: 2 }, 
         tail: Vec::from([Point { x: 2, y: 0 }, Point { x: 2, y: 1 }]),
     };
+
+    move_snake(snake);    
+    draw_apples(apples_pos);
 
     loop {
         let mut new_direction = Direction::None;
@@ -70,8 +76,8 @@ fn game_loop(){
                            match ch {
                                'q' => break,
                                'c' => break,
-                               '-' => unsafe{ if SPEED_MULT < 20 { SPEED_MULT += 1; continue }},
-                               '+' => unsafe{ if SPEED_MULT != 1 { SPEED_MULT -= 1; continue }},
+                               '-' => unsafe{ if SPEED_MULT < 20 { SPEED_MULT += 1;} continue },
+                               '+' => unsafe{ if SPEED_MULT != 1 { SPEED_MULT -= 1;} continue },
                                ' ' => unsafe{ GAME_PAUSED = !GAME_PAUSED; continue },
                                _ => {
                                     continue;
@@ -80,7 +86,7 @@ fn game_loop(){
                        }
                        
                     KeyEvent::Down => {
-                           if snake_direction != Direction::Up && snake_direction != Direction::Down {
+                           if snake_direction != Direction::Up && snake_direction != Direction::Down || !last_chance {
                                new_direction = Direction::Down;
                            }else{
                                continue;
@@ -88,7 +94,7 @@ fn game_loop(){
                        }
                        
                     KeyEvent::Up => {
-                           if snake_direction != Direction::Down && snake_direction != Direction::Up {
+                           if snake_direction != Direction::Down && snake_direction != Direction::Up || !last_chance {
                                new_direction = Direction::Up;
                            }else{
                                continue;
@@ -96,7 +102,7 @@ fn game_loop(){
                        }
                        
                     KeyEvent::Left => {
-                           if snake_direction != Direction::Right && snake_direction != Direction::Left {
+                           if snake_direction != Direction::Right && snake_direction != Direction::Left || !last_chance {
                                new_direction = Direction::Left;
                            }else{
                                continue;
@@ -104,7 +110,7 @@ fn game_loop(){
                        }
                        
                     KeyEvent::Right => {
-                           if snake_direction != Direction::Left && snake_direction != Direction::Right {
+                           if snake_direction != Direction::Left && snake_direction != Direction::Right || !last_chance {
                                new_direction = Direction::Right;
                            }else{
                                continue;
@@ -118,7 +124,7 @@ fn game_loop(){
         }
         
         if unsafe{ GAME_PAUSED } {
-            draw_game(snake, points, apple_pos);
+            draw_game(snake, points, apples_pos);
             sleep(unsafe{ SPEED_MULT } * 20);
             continue;
         }
@@ -127,29 +133,55 @@ fn game_loop(){
             (*snake).direction = new_direction;
         }
         
-        // Move the snake
-        move_snake(snake);
+        
+        let prev_snake = snake.clone();
+        
+        move_snake(snake);        
+        draw_game(snake, points, apples_pos);
         
         if !check_snake_out_pos(snake) {
-            game_over(points);
-            while next_key() != Some(InputEvent::Keyboard(KeyEvent::Char('\n'))){
-                sleep(10)
+            if !last_chance{
+                game_over(points);
+                while next_key() != Some(InputEvent::Keyboard(KeyEvent::Char('\n'))){
+                    sleep(10)
+                }
+                return;
             }
-            return;
+            
+            snake.head_pos = prev_snake.head_pos;
+            snake.direction = prev_snake.direction;
+            snake.tail = prev_snake.tail;
+            unsafe{
+                BAR_COLOR = crossterm::Color::Red;
+            }
+            
+            draw_game(snake, points, apples_pos);
+            
+            last_chance = false;
+            sleep(unsafe{ SPEED_MULT } * 20 * 3);
+            continue;
         }
         
-        if snake_eated_apple(snake, apple_pos) {
-            points += 1;
-            snake.tail.push(Point { x: snake.head_pos.x, y: snake.head_pos.y });
-            apple_pos = reset_apple();
+        
+        last_chance = true;
+        unsafe{
+            BAR_COLOR = crossterm::Color::DarkGreen;
         }
         
-        draw_game(snake, points, apple_pos);
+        for apple_pos in apples_pos.iter_mut() {
+            if snake_eated_apple(snake, *apple_pos) {
+                points += 1;
+                snake.tail.push(Point { x: snake.head_pos.x, y: snake.head_pos.y });
+                *apple_pos = reset_apple();
+                
+                draw_apple(apple_pos);
+            }
+        }
+        
         
         sleep(unsafe{ SPEED_MULT } * 20);
     }
 }
-
 
 fn reset_apple() -> Point {
     let mut rand = rand::thread_rng();
@@ -157,6 +189,29 @@ fn reset_apple() -> Point {
         x: rand.gen_range(0..PLAYABLE_SIZE_MAX) as i16, 
         y: rand.gen_range(1..PLAYABLE_SIZE_MAX) as i16
     }
+}
+
+fn draw_apples(apples_pos: &[Point]){
+    for apple in apples_pos.iter() {
+        draw_apple(apple)
+    }
+}
+
+fn draw_apple(apple: &Point){    
+    let mut rand = rand::thread_rng();
+    let leaf = match rand.gen_range(0..4) {
+        0 => "o\\",
+        1 => " /o",
+        2 => " |D",
+        3 => " |>",
+        _ => "\\o",
+    };
+    
+    cmd_goto(apple.x * 2, apple.y - 1);
+    printc(leaf, Color::Green, Color::Black);
+    
+    cmd_goto(apple.x * 2, apple.y);
+    printc("()", Color::Yellow, Color::Red);
 }
 
 
@@ -206,21 +261,13 @@ fn move_snake(snake: &mut Snake){
         _ => {}
     }
     
-    snake.tail.rotate_left(1);
+    let first_tail_part = snake.tail[0];
+    cmd_goto(first_tail_part.x * 2, first_tail_part.y);
+    printc("  ", Color::Black, Color::Black);    
     
-    for part in snake.tail.iter() {
-        cmd_goto(part.x * 2, part.y);
-        printc("  ", Color::Black, Color::Black);
-    }
-    
-    
+    snake.tail.rotate_left(1);    
     snake.tail.remove(snake.tail.len() - 1);
     snake.tail.push(prev_snake_pos);
-    
-    for part in snake.tail.iter() {
-        cmd_goto(part.x * 2, part.y);
-        printc("  ", Color::Black, Color::Black);
-    }
 }
 
 
@@ -246,11 +293,11 @@ fn printc(txt: &str, fore_color: crossterm::Color, back_color: crossterm::Color)
 
 
 static mut TEMPO: bool = false;
-fn draw_game(snake: &Snake, points: i32, apple: Point){    
+fn draw_game(snake: &Snake, points: i32, apples: &[Point]){    
     let gap = "  ";
     
     cmd_goto(0, 0);
-    printc(&" ".repeat(PLAYABLE_SIZE_MAX as usize * 2), crossterm::Color::Black, crossterm::Color::DarkGreen);
+    printc(&" ".repeat(PLAYABLE_SIZE_MAX as usize * 2), crossterm::Color::Black, unsafe{BAR_COLOR});
     
     
     let mut score_menu = String::from("Points: ") + &points.to_string();
@@ -263,14 +310,14 @@ fn draw_game(snake: &Snake, points: i32, apple: Point){
         score_menu += " (PAUSED)";
     }    
     
+    cmd_goto(0, 0);
+    printc(&score_menu, crossterm::Color::Black, unsafe{BAR_COLOR});
     
-    CURSOR.goto(0, 0).unwrap();
-    print!("{}", style(score_menu).with(crossterm::Color::Black).on(crossterm::Color::DarkGreen));
     
-    cmd_goto(apple.x * 2, apple.y - 1);
-    printc(" /", Color::Green, Color::Black);
-    cmd_goto(apple.x * 2, apple.y);
-    printc("()", Color::Yellow, Color::Red);
+    for part in snake.tail.iter() {
+        cmd_goto(part.x * 2, part.y);
+        printc("  ", Color::Black, Color::Black);
+    }
     
     //let mut i = 0;
     for tail_part in snake.tail.iter() {        
@@ -283,10 +330,7 @@ fn draw_game(snake: &Snake, points: i32, apple: Point){
     
     cmd_goto(snake.head_pos.x * 2, snake.head_pos.y);
     let head: &str;    
-    if unsafe{
-        TEMPO = !TEMPO;
-        TEMPO
-    } {
+    if unsafe{ TEMPO = !TEMPO; TEMPO } {
         match snake.direction {
             Direction::Up => head = "\\/",
             Direction::Down => head = "/\\",
