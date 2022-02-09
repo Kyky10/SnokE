@@ -1,0 +1,1 @@
+cargo +nightly build -Z build-std=std,panic_abort
