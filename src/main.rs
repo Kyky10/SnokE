@@ -46,8 +46,7 @@ fn next_key() -> Option<InputEvent> {
     return STDIN.lock().unwrap().next();
 }
 
-fn game_loop(){
-    let apples_pos: &mut [Point] = &mut [reset_apple(), reset_apple(), reset_apple(), reset_apple()];
+fn game_loop(){    
     let mut points: i32 = 0;
     let mut last_chance: bool = true;
     let mut snake = &mut Snake { 
@@ -55,6 +54,8 @@ fn game_loop(){
         head_pos: Point { x: 2, y: 2 }, 
         tail: Vec::from([Point { x: 2, y: 0 }, Point { x: 2, y: 1 }]),
     };
+
+    let apples_pos: &mut [Point] = &mut [reset_apple(snake), reset_apple(snake), reset_apple(snake), reset_apple(snake)];
 
     move_snake(snake);    
     draw_apples(apples_pos);
@@ -172,7 +173,7 @@ fn game_loop(){
             if snake_eated_apple(snake, *apple_pos) {
                 points += 1;
                 snake.tail.push(Point { x: snake.head_pos.x, y: snake.head_pos.y });
-                *apple_pos = reset_apple();
+                *apple_pos = reset_apple(snake);
                 
                 draw_apple(apple_pos);
             }
@@ -183,12 +184,25 @@ fn game_loop(){
     }
 }
 
-fn reset_apple() -> Point {
+fn reset_apple(snake:&Snake) -> Point {
     let mut rand = rand::thread_rng();
-    Point{
-        x: rand.gen_range(0..PLAYABLE_SIZE_MAX) as i16, 
-        y: rand.gen_range(1..PLAYABLE_SIZE_MAX) as i16
+    let mut point: Point;
+    
+    loop {
+        point = Point{
+            x: rand.gen_range(0..PLAYABLE_SIZE_MAX) as i16, 
+            y: rand.gen_range(1..PLAYABLE_SIZE_MAX) as i16
+        };
+
+        if snake.tail.contains(&point) || point == snake.head_pos{
+            continue;
+        }
+
+        break;
     }
+    
+
+    point
 }
 
 fn draw_apples(apples_pos: &[Point]){
@@ -314,10 +328,10 @@ fn draw_game(snake: &Snake, points: i32, apples: &[Point]){
     printc(&score_menu, crossterm::Color::Black, unsafe{BAR_COLOR});
     
     
-    for part in snake.tail.iter() {
+    /*for part in snake.tail.iter() {
         cmd_goto(part.x * 2, part.y);
         printc("  ", Color::Black, Color::Black);
-    }
+    }*/
     
     //let mut i = 0;
     for tail_part in snake.tail.iter() {        
@@ -360,7 +374,7 @@ fn flush_stdout() {
     io::stdout().flush().unwrap();
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq)]
 struct Point {
     x: i16,
     y: i16,
